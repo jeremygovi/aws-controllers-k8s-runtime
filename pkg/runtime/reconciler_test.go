@@ -99,6 +99,8 @@ func resourceMocks() (
 	res.On("DeepCopy").Return(res)
 	// DoNothing on SetStatus call.
 	res.On("SetStatus", res).Return(func(res ackmocks.AWSResource) {})
+	// By default, resources are not being deleted (deletionTimestamp is nil)
+	res.On("IsBeingDeleted").Return(false)
 
 	return res, rtObj, metaObj
 }
@@ -1911,4 +1913,86 @@ func TestReconcile_AccountDrifted(t *testing.T) {
 	require.NotNil(err)
 	assert.Contains(t, err.Error(), "Resource already exists in account 111111111111")
 	assert.Contains(t, err.Error(), "but the role used for reconciliation is in account 222222222222")
+}
+// TestSetResourceManagedOnDeletingResource ensures that setResourceManaged
+// does not attempt to add finalizers to resources that are being deleted.
+// This prevents the "metadata.finalizers: Forbidden: no new finalizers can be
+// added if the object is being deleted" error that occurs when reconciliation
+// loops continue after deletion has started.
+func TestSetResourceManagedOnDeletingResource(t *testing.T) {
+	require := require.New(t)
+
+	// Setup
+	ctx := context.TODO()
+	res, _, metaObj := resourceMocks()
+	now := metav1.Now()
+	metaObj.SetDeletionTimestamp(&now)
+	res.On("IsBeingDeleted").Return(true)
+
+	// Create a mock resource descriptor
+	rd := &ackmocks.AWSResourceDescriptor{}
+	rd.On("IsManaged", res).Return(false)
+
+	// Create a mock resource manager
+	rm := &ackmocks.AWSResourceManager{}
+
+	// Create reconciler
+	r := &resourceReconciler{
+		reconciler: reconciler{
+			log: ctrlrtzap.New(
+				ctrlrtzap.UseDevMode(true),
+				ctrlrtzap.Level(zapcore.InfoLevel),
+			),
+		},
+		rd: rd,
+	}
+
+	// Call setResourceManaged - should return nil without attempting to add finalizers
+	err := r.setResourceManaged(ctx, rm, res)
+
+	// Verify
+	require.Nil(err)
+	// Verify MarkManaged was NOT called (because we returned early)
+	rd.AssertNotCalled(t, "MarkManaged", res)
+}
+
+// TestSetResourceManagedAndAdoptedOnDeletingResource ensures that
+// setResourceManagedAndAdopted does not attempt to add finalizers to
+// resources that are being deleted during adoption workflows.
+func TestSetResourceManagedAndAdoptedOnDeletingResource(t *testing.T) {
+	require := require.New(t)
+
+	// Setup
+	ctx := context.TODO()
+	res, _, metaObj := resourceMocks()
+	now := metav1.Now()
+	metaObj.SetDeletionTimestamp(&now)
+	res.On("IsBeingDeleted").Return(true)
+
+	// Create a mock resource descriptor
+	rd := &ackmocks.AWSResourceDescriptor{}
+	rd.On("IsManaged", res).Return(false)
+
+	// Create a mock resource manager
+	rm := &ackmocks.AWSResourceManager{}
+
+	// Create reconciler
+	r := &resourceReconciler{
+		reconciler: reconciler{
+			log: ctrlrtzap.New(
+				ctrlrtzap.UseDevMode(true),
+				ctrlrtzap.Level(zapcore.InfoLevel),
+			),
+		},
+		rd: rd,
+	}
+
+	// Call setResourceManagedAndAdopted - should return nil without attempting to add finalizers
+	err := r.setResourceManagedAndAdopted(ctx, rm, res)
+
+	// Verify
+	require.Nil(err)
+	// Verify MarkManaged and MarkAdopted were NOT called (because we returned early)
+	rd.AssertNotCalled(t, "MarkManaged", res)
+	rd.AssertNotCalled(t, "MarkAdopted", res)
 }

@@ -1160,6 +1160,14 @@ func (r *resourceReconciler) setResourceManaged(
 	if r.rd.IsManaged(res) {
 		return nil
 	}
+	// Do not attempt to add finalizers to resources that are being deleted.
+	// Kubernetes forbids adding new finalizers to objects with deletionTimestamp set.
+	// This prevents "metadata.finalizers: Forbidden: no new finalizers can be added
+	// if the object is being deleted" errors during reconciliation loops that occur
+	// after deletion has started.
+	if res.IsBeingDeleted() {
+		return nil
+	}
 	var err error
 	rlog := ackrtlog.FromContext(ctx)
 	exit := rlog.Trace("r.setResourceManaged")
@@ -1186,6 +1194,14 @@ func (r *resourceReconciler) setResourceManagedAndAdopted(
 	res acktypes.AWSResource,
 ) error {
 	if r.rd.IsManaged(res) {
+		return nil
+	}
+	// Do not attempt to add finalizers to resources that are being deleted.
+	// Kubernetes forbids adding new finalizers to objects with deletionTimestamp set.
+	// This prevents "metadata.finalizers: Forbidden: no new finalizers can be added
+	// if the object is being deleted" errors during reconciliation loops that occur
+	// after deletion has started (e.g., during adoption workflows).
+	if res.IsBeingDeleted() {
 		return nil
 	}
 	var err error
